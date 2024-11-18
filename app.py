@@ -1,14 +1,37 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import csv
+import chardet
 
 # Função para determinar se um processo é Meta2
 def is_meta2(numero_processo, ano_corte):
     try:
         ano_processo = int(numero_processo.split("-")[1].split(".")[0])
         return ano_processo < ano_corte
-    except:
+    except Exception:
         return False
+
+# Função para detectar o delimitador do CSV
+def detect_delimiter(uploaded_file, encoding):
+    sample = uploaded_file.read(1024)
+    uploaded_file.seek(0)  # Resetar o ponteiro para o início do arquivo
+    try:
+        sample = sample.decode(encoding)
+    except UnicodeDecodeError:
+        # Se não conseguir decodificar, retornar delimitador padrão
+        return ','
+    sniffer = csv.Sniffer()
+    dialect = sniffer.sniff(sample)
+    return dialect.delimiter
+
+# Função para detectar a codificação do arquivo
+def detect_encoding(uploaded_file):
+    raw_data = uploaded_file.read()
+    result = chardet.detect(raw_data)
+    encoding = result['encoding']
+    uploaded_file.seek(0)  # Resetar o ponteiro para o início do arquivo
+    return encoding
 
 # Ler a planilha (csv ou xlsx)
 def process_data(uploaded_file, ano_corte):
@@ -19,7 +42,24 @@ def process_data(uploaded_file, ano_corte):
         if file_extension == 'xlsx':
             df = pd.read_excel(uploaded_file)
         elif file_extension == 'csv':
-            df = pd.read_csv(uploaded_file)
+            # Detectar a codificação do arquivo
+            encoding = detect_encoding(uploaded_file)
+            # Detectar o delimitador
+            delimiter = detect_delimiter(uploaded_file, encoding)
+
+            # Tentar ler o CSV com as configurações detectadas
+            try:
+                df = pd.read_csv(uploaded_file, delimiter=delimiter, encoding=encoding)
+            except Exception as e:
+                # Se falhar, tentar com engine 'python' e ignorar linhas ruins
+                uploaded_file.seek(0)
+                df = pd.read_csv(
+                    uploaded_file,
+                    delimiter=delimiter,
+                    encoding=encoding,
+                    engine='python',
+                    on_bad_lines='skip'
+                )
         else:
             raise ValueError("Formato de arquivo não suportado. Use .csv ou .xlsx")
     except Exception as e:
@@ -30,6 +70,9 @@ def process_data(uploaded_file, ano_corte):
     for col in required_columns:
         if col not in df.columns:
             raise ValueError(f"A coluna '{col}' é obrigatória no arquivo.")
+
+    # Remover linhas com valores nulos nas colunas necessárias
+    df.dropna(subset=required_columns, inplace=True)
 
     # Adicionar coluna Meta2
     df['Meta2'] = df['numeroProcesso'].apply(lambda x: is_meta2(x, ano_corte))
@@ -58,6 +101,11 @@ def main():
         if mostrar_meta2:
             df = df[df['Meta2']]
 
+        # Verificar se há dados após o filtro
+        if df.empty:
+            st.warning("Nenhum dado disponível para as seleções feitas.")
+            return
+
         # Selecionar os 'nomeTarefa' para exibir
         nome_tarefa_options = df['nomeTarefa'].unique()
         selected_tarefas = st.multiselect("Selecione os Nome da Tarefa para visualizar:", options=nome_tarefa_options, default=nome_tarefa_options)
@@ -85,15 +133,19 @@ def main():
         st.subheader("Quantidade e Porcentagem por Nome da Tarefa")
         st.write(table_data)
 
-        # Gráfico de Pizza Interativo
-        fig = px.pie(
-            table_data,
-            names='Nome da Tarefa',
-            values='Quantidade',
-            title='Distribuição de Processos por Nome da Tarefa',
-            hole=0.4  # Para transformar em gráfico de rosca
-        )
-        st.plotly_chart(fig)
+        # Verificar se há dados para o gráfico
+        if not table_data.empty:
+            # Gráfico de Pizza Interativo
+            fig = px.pie(
+                table_data,
+                names='Nome da Tarefa',
+                values='Quantidade',
+                title='Distribuição de Processos por Nome da Tarefa',
+                hole=0.4  # Para transformar em gráfico de rosca
+            )
+            st.plotly_chart(fig)
+        else:
+            st.warning("Nenhum dado disponível para gerar o gráfico.")
     else:
         st.info("Por favor, envie um arquivo para iniciar a análise.")
 
