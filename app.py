@@ -1,8 +1,8 @@
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import csv
 import chardet
+import re
 
 # Função para determinar se um processo é Meta2
 def is_meta2(numero_processo, ano_corte):
@@ -11,19 +11,6 @@ def is_meta2(numero_processo, ano_corte):
         return ano_processo < ano_corte
     except Exception:
         return False
-
-# Função para detectar o delimitador do CSV
-def detect_delimiter(uploaded_file, encoding):
-    sample = uploaded_file.read(1024)
-    uploaded_file.seek(0)  # Resetar o ponteiro para o início do arquivo
-    try:
-        sample = sample.decode(encoding)
-    except UnicodeDecodeError:
-        # Se não conseguir decodificar, retornar delimitador padrão
-        return ','
-    sniffer = csv.Sniffer()
-    dialect = sniffer.sniff(sample)
-    return dialect.delimiter
 
 # Função para detectar a codificação do arquivo
 def detect_encoding(uploaded_file):
@@ -34,7 +21,7 @@ def detect_encoding(uploaded_file):
     return encoding
 
 # Ler a planilha (csv ou xlsx)
-def process_data(uploaded_file, ano_corte):
+def process_data(uploaded_file, ano_corte, delimiters, quotechar):
     try:
         # Verificar o tipo de arquivo com base no nome
         file_extension = uploaded_file.name.split('.')[-1].lower()
@@ -44,22 +31,21 @@ def process_data(uploaded_file, ano_corte):
         elif file_extension == 'csv':
             # Detectar a codificação do arquivo
             encoding = detect_encoding(uploaded_file)
-            # Detectar o delimitador
-            delimiter = detect_delimiter(uploaded_file, encoding)
+            uploaded_file.seek(0)  # Resetar o ponteiro novamente
 
-            # Tentar ler o CSV com as configurações detectadas
-            try:
-                df = pd.read_csv(uploaded_file, delimiter=delimiter, encoding=encoding)
-            except Exception as e:
-                # Se falhar, tentar com engine 'python' e ignorar linhas ruins
-                uploaded_file.seek(0)
-                df = pd.read_csv(
-                    uploaded_file,
-                    delimiter=delimiter,
-                    encoding=encoding,
-                    engine='python',
-                    on_bad_lines='skip'
-                )
+            # Criar expressão regular para múltiplos delimitadores
+            delimiters = delimiters.replace('\\t', '\t')  # Substituir representação da tabulação
+            delimiter_regex = '|'.join(map(re.escape, delimiters))
+
+            # Tentar ler o CSV com as configurações fornecidas
+            df = pd.read_csv(
+                uploaded_file,
+                sep=delimiter_regex,
+                quotechar=quotechar,
+                encoding=encoding,
+                engine='python',
+                on_bad_lines='skip'
+            )
         else:
             raise ValueError("Formato de arquivo não suportado. Use .csv ou .xlsx")
     except Exception as e:
@@ -89,9 +75,14 @@ def main():
         # Selecionar o ano de corte para Meta2
         ano_corte = st.number_input("Selecione o ano de corte para Meta2:", min_value=1900, max_value=2100, value=2021, step=1)
 
+        # Opções para especificar o delimitador e o caractere de citação
+        st.subheader("Configurações do Arquivo CSV")
+        delimiters = st.text_input("Delimitadores (pode inserir múltiplos caracteres, por exemplo, '\\t;'):", value='\\t;')
+        quotechar = st.text_input("Caractere de citação (padrão é '\"'):", value="'")
+
         # Processar os dados
         try:
-            df = process_data(uploaded_file, ano_corte)
+            df = process_data(uploaded_file, ano_corte, delimiters, quotechar)
         except Exception as e:
             st.error(f"Erro ao processar o arquivo: {e}")
             return
